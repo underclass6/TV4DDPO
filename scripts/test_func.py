@@ -305,6 +305,7 @@ def main(_):
 
     # Critic
     v_net = Critic(pipeline.unet.config.in_channels, 32, 1, [], [], 1)
+    v_net.to(accelerator.device)
     v_net_optim = torch.optim.Adam(v_net.parameters(), lr=3e-4)
 
     global_step = 0
@@ -367,7 +368,7 @@ def main(_):
                     "prompt_ids": prompt_ids,
                     "prompt_embeds": prompt_embeds,
                     "timesteps": timesteps,
-                    "next_timesteps": torch.cat((timesteps[:, 1:], torch.full((timesteps.shape[0], 1), -1)), dim=1),
+                    "next_timesteps": torch.cat((timesteps[:, 1:], torch.full((timesteps.shape[0], 1), -1).to(accelerator.device)), dim=1),
                     "latents": latents[
                         :, :-1
                     ],  # each entry is the latent before timestep t
