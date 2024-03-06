@@ -1,3 +1,9 @@
+#########################################
+# add transition valuation
+#########################################
+
+
+
 import sys
 sys.path.append("./")
 
@@ -311,6 +317,11 @@ def main(_):
     v_net.to(accelerator.device)
     v_net_optim = torch.optim.Adam(v_net.parameters(), lr=3e-4)
 
+    # replay buffer
+    replay_buffer = []  # each element is a trajectory
+    rb_size = 10  # the size of replay buffer
+    selected_size = 2  # the number of trajectories selected from replay buffer
+
     global_step = 0
     for epoch in range(first_epoch, config.num_epochs):
         #################### SAMPLING ####################
@@ -395,8 +406,75 @@ def main(_):
             # accelerator.print(reward_metadata)
             sample["rewards"] = torch.as_tensor(rewards, device=accelerator.device)
 
+
+        # valuate trajectories
+        replay_buffer.extend(samples)
+        diff = len(replay_buffer) - rb_size
+        if diff > 0:
+            for i in range(diff):
+                replay_buffer.pop(i)
+
+        rb_collated = {k: torch.cat([s[k] for s in replay_buffer]) for k in replay_buffer[0].keys()}
+
+        # rebatch rb_collated
+        rb_collated_batched = {
+            k: v.reshape(-1, config.train.batch_size, *v.shape[1:])
+            for k, v in rb_collated.items()
+        }
+
+        # dict of lists -> list of dicts for easier iteration
+        rb_collated_batched = [
+            dict(zip(rb_collated_batched, x)) for x in zip(*rb_collated_batched.values())
+        ]
+
+        # calculate the value of trajectories in replay buffer based on transition valuation
+        v_net.eval()
+        trajs = []
+        trajs_value = torch.tensor([])
+        for sample in rb_collated_batched:
+            avg_adv = 0.0
+            for t in range(config.sample.num_steps):
+                reward = sample["rewards"]
+
+                r = 0.0
+
+                s_t = v_net(
+                    sample["latents"][:, t],
+                    sample['timesteps'][:, t],
+                    sample["prompt_embeds"]
+                )
+                s_tt = v_net(
+                    sample['next_latents'][:, t],
+                    sample['next_timesteps'][:, t],
+                    sample["prompt_embeds"]
+                )
+
+                if sample['next_timesteps'][:, t] == 1:
+                    r = reward
+                elif sample['next_timesteps'][:, t] == -1:
+                    s_tt = reward
+
+                adv = r + s_tt - s_t
+                avg_adv += adv
+            avg_adv /= config.sample.num_steps
+            trajs.append(sample)
+            trajs_value = torch.cat((trajs_value, avg_adv.detach().cpu()), dim=0)
+
+        trajs_collated = {k: torch.cat([s[k] for s in trajs]) for k in trajs[0].keys()}
+        trajs_value = trajs_value.squeeze()
+        trajs_value_sorted, indices = torch.sort(trajs_value, descending=True)
+
+        selected_indices = indices[:selected_size]
+
+        selected_trajs = {k: trajs_collated[k][selected_indices] for k in trajs_collated.keys()}
+
+
+
         # collate samples into dict where each entry has shape (num_batches_per_epoch * sample.batch_size, ...)
         samples = {k: torch.cat([s[k] for s in samples]) for k in samples[0].keys()}
+
+        # merge samples with selected trajectories
+        samples = {k: torch.cat((samples[k], selected_trajs[k])) for k in samples.keys()}
 
         # this is a hack to force wandb to log the images as JPEGs instead of PNGs
         with tempfile.TemporaryDirectory() as tmpdir:
