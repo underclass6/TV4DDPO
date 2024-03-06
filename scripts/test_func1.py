@@ -431,7 +431,9 @@ def main(_):
         v_net.eval()
         trajs = []
         trajs_value = torch.tensor([])
+        lmd = 0.5
         for sample in rb_collated_batched:
+            avg_d = 0.0
             avg_adv = 0.0
             for t in range(config.sample.num_steps):
                 # calculate the action distance
@@ -473,10 +475,8 @@ def main(_):
 
                 latents_diff = next_latents_pred - sample["next_latents"][:, t]
                 d = torch.norm(latents_diff, p=2, dim=(1, 2, 3))
-                print(f"distance: {d}")
-                print(f"distance size: {d.size()}")
 
-                assert(1 == 0)
+                avg_d += d
 
                 # calculate the advantages
                 reward = sample["rewards"]
@@ -501,9 +501,13 @@ def main(_):
 
                 adv = r + s_tt - s_t
                 avg_adv += adv
+            avg_d /= config.sample.num_steps
             avg_adv /= config.sample.num_steps
+            print(f"avg d: {avg_d}")
+            print(f"avg adv: {avg_adv}")
+            v = lmd * avg_d + (1 - lmd) * avg_adv
             trajs.append(sample)
-            trajs_value = torch.cat((trajs_value, avg_adv.detach().cpu()), dim=0)
+            trajs_value = torch.cat((trajs_value, v.detach().cpu()), dim=0)
 
         trajs_collated = {k: torch.cat([s[k] for s in trajs]) for k in trajs[0].keys()}
         trajs_value = trajs_value.squeeze()
