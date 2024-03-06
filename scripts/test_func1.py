@@ -470,11 +470,13 @@ def main(_):
                     eta=config.sample.eta,
                     prev_sample=sample["next_latents"][:, t],
                 )
-                print(f"next latents pred: {next_latents_pred.size()}")
 
                 latents_diff = next_latents_pred - sample["next_latents"][:, t]
-                d = torch.norm(latents_diff, p=2, dim=(2, 3, 4))
+                d = torch.norm(latents_diff, p=2, dim=(1, 2, 3))
                 print(f"distance: {d}")
+                print(f"distance size: {d.size()}")
+
+                assert(1 == 0)
 
                 # calculate the advantages
                 reward = sample["rewards"]
