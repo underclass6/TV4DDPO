@@ -323,6 +323,7 @@ def main(_):
             disable=not accelerator.is_local_main_process,
             position=0,
         ):
+            print(f"Device is {accelerator.device}")
             # generate prompts
             prompts, prompt_metadata = zip(
                 *[
@@ -452,7 +453,7 @@ def main(_):
             .to(accelerator.device)
         )
 
-        del samples["rewards"]
+        # del samples["rewards"]
         del samples["prompt_ids"]
 
         total_batch_size, num_timesteps = samples["timesteps"].shape
@@ -510,6 +511,7 @@ def main(_):
                     embeds = sample["prompt_embeds"]
 
                 # update critic
+                v_net.train()
                 for j in tqdm(
                     range(num_train_timesteps),
                     desc='Timestep for critic',
@@ -552,6 +554,8 @@ def main(_):
                     v_net_optim.step()
 
                     print(f"critic loss: {critic_loss.item():.6f}")
+
+                v_net.eval()
 
                 for j in tqdm(
                     range(num_train_timesteps),
@@ -597,14 +601,43 @@ def main(_):
                             config.train.adv_clip_max,
                         )
 
+                        # -------------------- advantage - current_v ----------------------
+                        advantages = sample["advantages"]
+
+                        scaling_factor = 0.005
                         current_v = v_net(
                             sample["latents"][:, j],
                             sample['timesteps'][:, j],
                             sample["prompt_embeds"]
                         )
                         print(f"current v: {current_v}")
-                        advantages = advantages - current_v
+                        advantages = advantages - scaling_factor * current_v
                         print(f"advantages: {advantages}")
+
+                        advantages = torch.clamp(
+                            advantages,
+                            -config.train.adv_clip_max,
+                            config.train.adv_clip_max
+                        )
+                        # -------------------- advantage - current_v ----------------------
+
+                        # -------------------- 0 - v and advantage - last_v ---------------------
+                        # ret = 0.0
+                        # scaling_factor = 1.0
+                        # discount_factor = 1.0
+                        # for t in range(j, num_train_timesteps-1):
+                        #     ret += -scaling_factor * discount_factor * v_net(
+                        #         sample["latents"][:, t],
+                        #         sample["timesteps"][:, t],
+                        #         sample["prompt_embeds"]
+                        #     )
+                        # ret += scaling_factor * discount_factor * (advantages - v_net(
+                        #     sample["latents"][:, num_train_timesteps-1],
+                        #     sample["timesteps"][:, num_train_timesteps-1],
+                        #     sample["prompt_embeds"]
+                        # ))
+                        # advantages = ret
+                        # -------------------- 0 - v and advantage - last_v ---------------------
 
                         ratio = torch.exp(log_prob - sample["log_probs"][:, j])
                         unclipped_loss = -advantages * ratio
