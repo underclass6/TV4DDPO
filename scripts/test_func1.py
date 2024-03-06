@@ -501,6 +501,10 @@ def main(_):
 
                 adv = r + s_tt - s_t
                 avg_adv += adv
+
+                # free cuda memory
+                del noise_pred, next_latents_pred, s_t, s_tt
+                torch.cuda.empty_cache()
             avg_d /= config.sample.num_steps
             avg_adv /= config.sample.num_steps
             print(f"avg d: {avg_d}")
