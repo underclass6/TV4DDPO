@@ -434,6 +434,49 @@ def main(_):
         for sample in rb_collated_batched:
             avg_adv = 0.0
             for t in range(config.sample.num_steps):
+                # calculate the action distance
+                if config.train.cfg:
+                    # concat negative prompts to sample prompts to avoid two forward passes
+                    embeds = torch.cat(
+                        [train_neg_prompt_embeds, sample["prompt_embeds"]]
+                    )
+                else:
+                    embeds = sample["prompt_embeds"]
+
+                if config.train.cfg:
+                    noise_pred = unet(
+                        torch.cat([sample["latents"][:, t]] * 2),
+                        torch.cat([sample["timesteps"][:, t]] * 2),
+                        embeds,
+                    ).sample
+                    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                    noise_pred = (
+                            noise_pred_uncond
+                            + config.sample.guidance_scale
+                            * (noise_pred_text - noise_pred_uncond)
+                    )
+                else:
+                    noise_pred = unet(
+                        sample["latents"][:, t],
+                        sample["timesteps"][:, t],
+                        embeds,
+                    ).sample
+
+                next_latents_pred, log_prob = ddim_step_with_logprob(
+                    pipeline.scheduler,
+                    noise_pred,
+                    sample["timesteps"][:, t],
+                    sample["latents"][:, t],
+                    eta=config.sample.eta,
+                    prev_sample=sample["next_latents"][:, t],
+                )
+                print(f"next latents pred: {next_latents_pred.size()}")
+
+                latents_diff = next_latents_pred - sample["next_latents"][:, t]
+                d = torch.norm(latents_diff, p=2, dim=(2, 3, 4))
+                print(f"distance: {d}")
+
+                # calculate the advantages
                 reward = sample["rewards"]
 
                 r = 0.0
