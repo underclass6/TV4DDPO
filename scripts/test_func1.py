@@ -537,7 +537,7 @@ def main(_):
         total_batch_size, num_timesteps = samples["timesteps"].shape
         assert (
             total_batch_size
-            == config.sample.batch_size * config.sample.num_batches_per_epoch
+            == config.sample.batch_size * config.sample.num_batches_per_epoch + selected_size
         )
         assert num_timesteps == config.sample.num_steps
 
