@@ -18,6 +18,7 @@ from diffusers.models.attention_processor import LoRAAttnProcessor
 import numpy as np
 import ddpo_pytorch.prompts
 import ddpo_pytorch.rewards
+import ddpo_pytorch.tem_scheduler
 from ddpo_pytorch.stat_tracking import PerPromptStatTracker
 from ddpo_pytorch.diffusers_patch.pipeline_with_logprob import pipeline_with_logprob
 from ddpo_pytorch.diffusers_patch.ddim_with_logprob import ddim_step_with_logprob
@@ -27,6 +28,8 @@ from functools import partial
 import tqdm
 import tempfile
 from PIL import Image
+import torch.nn.functional as F
+from models.actor_critic import Critic
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
@@ -304,6 +307,19 @@ def main(_):
     else:
         first_epoch = 0
 
+    # Critic
+    v_net = Critic(pipeline.unet.config.in_channels, config.channels, config.n_res_blocks, config.attention_levels, config.channel_multipliers, config.n_heads)
+    v_net.to(accelerator.device)
+    v_net_optim = torch.optim.Adam(v_net.parameters(), lr=config.learning_rate)
+
+    # replay buffer
+    replay_buffer = []  # each element is a trajectory
+    rb_size = config.rb_size  # the size of replay buffer
+    selected_size = config.selected_size  # the number of trajectories selected from replay buffer
+
+    # temperature scheduler
+    tem_scheduler = getattr(ddpo_pytorch.tem_scheduler, config.tem_scheduler)
+
     global_step = 0
     for epoch in range(first_epoch, config.num_epochs):
         #################### SAMPLING ####################
@@ -316,6 +332,7 @@ def main(_):
             disable=not accelerator.is_local_main_process,
             position=0,
         ):
+            print(f"Device is {accelerator.device}")
             # generate prompts
             prompts, prompt_metadata = zip(
                 *[
@@ -364,6 +381,7 @@ def main(_):
                     "prompt_ids": prompt_ids,
                     "prompt_embeds": prompt_embeds,
                     "timesteps": timesteps,
+                    "next_timesteps": torch.cat((timesteps[:, 1:], torch.full((timesteps.shape[0], 1), -1).to(accelerator.device)), dim=1),
                     "latents": latents[
                         :, :-1
                     ],  # each entry is the latent before timestep t
@@ -386,8 +404,134 @@ def main(_):
             # accelerator.print(reward_metadata)
             sample["rewards"] = torch.as_tensor(rewards, device=accelerator.device)
 
+
+        # valuate trajectories
+        replay_buffer.extend(samples)
+        diff = len(replay_buffer) - rb_size
+        if diff > 0:
+            for i in range(diff):
+                replay_buffer.pop(i)
+
+        rb_collated = {k: torch.cat([s[k] for s in replay_buffer]) for k in replay_buffer[0].keys()}
+
+        # rebatch rb_collated
+        rb_collated_batched = {
+            k: v.reshape(-1, config.train.batch_size, *v.shape[1:])
+            for k, v in rb_collated.items()
+        }
+
+        # dict of lists -> list of dicts for easier iteration
+        rb_collated_batched = [
+            dict(zip(rb_collated_batched, x)) for x in zip(*rb_collated_batched.values())
+        ]
+
+        # calculate the value of trajectories in replay buffer based on transition valuation
+        v_net.eval()
+        trajs = []
+        trajs_value = torch.tensor([])
+        lmd = 0.5
+        for sample in rb_collated_batched:
+            avg_d = 0.0
+            avg_adv = 0.0
+            for t in range(config.sample.num_steps):
+                # calculate the action distance
+                # if config.train.cfg:
+                    # concat negative prompts to sample prompts to avoid two forward passes
+                #     embeds = torch.cat(
+                #         [train_neg_prompt_embeds, sample["prompt_embeds"]]
+                #     )
+                # else:
+                #     embeds = sample["prompt_embeds"]
+
+                # if config.train.cfg:
+                #     noise_pred = unet(
+                #         torch.cat([sample["latents"][:, t]] * 2),
+                #         torch.cat([sample["timesteps"][:, t]] * 2),
+                #         embeds,
+                #     ).sample
+                #     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                #     noise_pred = (
+                #             noise_pred_uncond
+                #             + config.sample.guidance_scale
+                #             * (noise_pred_text - noise_pred_uncond)
+                #     )
+                # else:
+                #     noise_pred = unet(
+                #         sample["latents"][:, t],
+                #         sample["timesteps"][:, t],
+                #         embeds,
+                #     ).sample
+
+                # next_latents_pred, log_prob = ddim_step_with_logprob(
+                #     pipeline.scheduler,
+                #     noise_pred,
+                #     sample["timesteps"][:, t],
+                #     sample["latents"][:, t],
+                #     eta=config.sample.eta,
+                #     prev_sample=sample["next_latents"][:, t],
+                # )
+
+                # latents_diff = next_latents_pred - sample["next_latents"][:, t]
+                # d = torch.norm(latents_diff, p=2, dim=(1, 2, 3))
+
+                # avg_d += d
+
+                # calculate the advantages
+                reward = sample["rewards"]
+
+                r = 0.0
+
+                s_t = v_net(
+                    sample["latents"][:, t],
+                    sample['timesteps'][:, t],
+                    sample["prompt_embeds"]
+                )
+                s_tt = v_net(
+                    sample['next_latents'][:, t],
+                    sample['next_timesteps'][:, t],
+                    sample["prompt_embeds"]
+                )
+
+                if sample['next_timesteps'][:, t] == 1:
+                    r = reward
+                elif sample['next_timesteps'][:, t] == -1:
+                    s_tt = reward
+
+                adv = r + s_tt - s_t
+                avg_adv += adv
+
+                # free cuda memory
+                # del noise_pred, next_latents_pred, s_t, s_tt
+                # torch.cuda.empty_cache()
+            avg_d /= config.sample.num_steps
+            avg_adv /= config.sample.num_steps
+            print(f"avg d: {avg_d}")
+            print(f"avg adv: {avg_adv}")
+            v = lmd * avg_d + (1 - lmd) * avg_adv
+            trajs.append(sample)
+            trajs_value = torch.cat((trajs_value, v.detach().cpu()), dim=0)
+
+        trajs_collated = {k: torch.cat([s[k] for s in trajs]) for k in trajs[0].keys()}
+        trajs_value = trajs_value.squeeze()
+
+        selection_prob = torch.nn.functional.softmax(trajs_value / tem_scheduler(epoch))
+        # sample from selection probability
+        indices = torch.multinomial(selection_prob, selected_size)
+        selected_trajs = {k: trajs_collated[k][indices] for k in trajs_collated.keys()}
+
+        # trajs_value_sorted, indices = torch.sort(trajs_value, descending=True)
+        #
+        # selected_indices = indices[:selected_size]
+        #
+        # selected_trajs = {k: trajs_collated[k][selected_indices] for k in trajs_collated.keys()}
+
+
+
         # collate samples into dict where each entry has shape (num_batches_per_epoch * sample.batch_size, ...)
         samples = {k: torch.cat([s[k] for s in samples]) for k in samples[0].keys()}
+
+        # merge samples with selected trajectories
+        samples = {k: torch.cat((samples[k], selected_trajs[k])) for k in samples.keys()}
 
         # this is a hack to force wandb to log the images as JPEGs instead of PNGs
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -444,13 +588,13 @@ def main(_):
             .to(accelerator.device)
         )
 
-        del samples["rewards"]
+        # del samples["rewards"]
         del samples["prompt_ids"]
 
         total_batch_size, num_timesteps = samples["timesteps"].shape
         assert (
             total_batch_size
-            == config.sample.batch_size * config.sample.num_batches_per_epoch
+            == config.sample.batch_size * config.sample.num_batches_per_epoch + selected_size
         )
         assert num_timesteps == config.sample.num_steps
 
@@ -467,7 +611,7 @@ def main(_):
                     for _ in range(total_batch_size)
                 ]
             )
-            for key in ["timesteps", "latents", "next_latents", "log_probs"]:
+            for key in ["timesteps", "next_timesteps", "latents", "next_latents", "log_probs"]:
                 samples[key] = samples[key][
                     torch.arange(total_batch_size, device=accelerator.device)[:, None],
                     perms,
@@ -484,7 +628,7 @@ def main(_):
                 dict(zip(samples_batched, x)) for x in zip(*samples_batched.values())
             ]
 
-            # train
+            # train policy and critic
             pipeline.unet.train()
             info = defaultdict(list)
             for i, sample in tqdm(
@@ -500,6 +644,53 @@ def main(_):
                     )
                 else:
                     embeds = sample["prompt_embeds"]
+
+                # update critic
+                v_net.train()
+                for j in tqdm(
+                    range(num_train_timesteps),
+                    desc='Timestep for critic',
+                ):
+                    advantages = torch.clamp(
+                        sample["advantages"],
+                        -config.train.adv_clip_max,
+                        config.train.adv_clip_max,
+                    ).float()
+
+                    # current v value
+                    current_v = v_net(
+                        sample["latents"][:, j],
+                        sample['timesteps'][:, j],
+                        sample["prompt_embeds"]
+                    )
+
+                    # target v value
+                    if sample['next_timesteps'][:, j] == 1:
+                        target_v = advantages + v_net(
+                        sample['next_latents'][:, j],
+                        sample['next_timesteps'][:, j],
+                        sample["prompt_embeds"]
+                    )
+                    elif sample['next_timesteps'][:, j] == -1:
+                        target_v = advantages
+                    else:
+                        target_v = v_net(
+                        sample['next_latents'][:, j],
+                        sample['next_timesteps'][:, j],
+                        sample["prompt_embeds"]
+                    )
+
+                    # critic loss
+                    critic_loss = F.mse_loss(current_v, target_v)
+
+                    # apply gradient descent
+                    v_net_optim.zero_grad()
+                    critic_loss.backward()
+                    v_net_optim.step()
+
+                    print(f"critic loss: {critic_loss.item():.6f}")
+
+                v_net.eval()
 
                 for j in tqdm(
                     range(num_train_timesteps),
@@ -544,6 +735,27 @@ def main(_):
                             -config.train.adv_clip_max,
                             config.train.adv_clip_max,
                         )
+
+                        # -------------------- advantage - current_v ----------------------
+                        advantages = sample["advantages"]
+
+                        scaling_factor = 0.005
+                        current_v = v_net(
+                            sample["latents"][:, j],
+                            sample['timesteps'][:, j],
+                            sample["prompt_embeds"]
+                        )
+                        print(f"current v: {current_v}")
+                        advantages = advantages - scaling_factor * current_v
+                        print(f"advantages: {advantages}")
+
+                        advantages = torch.clamp(
+                            advantages,
+                            -config.train.adv_clip_max,
+                            config.train.adv_clip_max
+                        )
+                        # -------------------- advantage - current_v ----------------------
+
                         ratio = torch.exp(log_prob - sample["log_probs"][:, j])
                         unclipped_loss = -advantages * ratio
                         clipped_loss = -advantages * torch.clamp(

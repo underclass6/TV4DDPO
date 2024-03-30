@@ -110,4 +110,26 @@ def get_config():
     # contains fewer than `min_count` values, the mean and std of the entire batch will be used instead.
     config.per_prompt_stat_tracking.min_count = 16
 
+    ###### TV4DDPO ######
+    # embedded channels
+    config.channels = 32
+    # the number of residual blocks
+    config.n_res_blocks = 1
+    # attention levels
+    config.attention_levels = []
+    # channel multipliers
+    config.channel_multipliers = []
+    # the number of heads
+    config.n_heads = 1
+
+    # learning rate of V
+    config.learning_rate = 3e-4
+
+    # replay buffer size
+    config.rb_size = 10
+    config.selected_size = 2
+
+    # temperature scheduler
+    config.tem_scheduler = "step_scheduler"
+
     return config
