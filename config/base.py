@@ -132,4 +132,7 @@ def get_config():
     # temperature scheduler
     config.tem_scheduler = "step_scheduler"
 
+    # lambda coefficient
+    config.lmd = 0.5
+
     return config
