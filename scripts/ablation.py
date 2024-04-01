@@ -447,22 +447,11 @@ def main(_):
                     embeds = sample["prompt_embeds"]
 
                 if config.train.cfg:
-                    # noise_pred = unet(
-                    #     torch.cat([sample["latents"][:, t]] * 2),
-                    #     torch.cat([sample["timesteps"][:, t]] * 2),
-                    #     embeds,
-                    # ).sample
-
-                    # checkpoint
-                    noise_pred = torch.utils.checkpoint.checkpoint(
-                        unet,
-                        (
-                            torch.cat([sample["latents"][:, t]] * 2),
-                            torch.cat([sample["timesteps"][:, t]] * 2),
-                            embeds,
-                        )
+                    noise_pred = unet(
+                        torch.cat([sample["latents"][:, t]] * 2),
+                        torch.cat([sample["timesteps"][:, t]] * 2),
+                        embeds,
                     ).sample
-
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                     noise_pred = (
                             noise_pred_uncond
@@ -470,20 +459,10 @@ def main(_):
                             * (noise_pred_text - noise_pred_uncond)
                     )
                 else:
-                    # noise_pred = unet(
-                    #     sample["latents"][:, t],
-                    #     sample["timesteps"][:, t],
-                    #     embeds,
-                    # ).sample
-
-                    # checkpoint
-                    noise_pred = torch.utils.checkpoint.checkpoint(
-                        unet,
-                        (
-                            sample["latents"][:, t],
-                            sample["timesteps"][:, t],
-                            embeds,
-                        )
+                    noise_pred = unet(
+                        sample["latents"][:, t],
+                        sample["timesteps"][:, t],
+                        embeds,
                     ).sample
 
                 next_latents_pred, log_prob = ddim_step_with_logprob(
@@ -501,32 +480,32 @@ def main(_):
                 avg_d += d
 
                 # calculate the advantages
-                reward = sample["rewards"]
+                # reward = sample["rewards"]
 
-                r = 0.0
+                # r = 0.0
 
-                s_t = v_net(
-                    sample["latents"][:, t],
-                    sample['timesteps'][:, t],
-                    sample["prompt_embeds"]
-                )
-                s_tt = v_net(
-                    sample['next_latents'][:, t],
-                    sample['next_timesteps'][:, t],
-                    sample["prompt_embeds"]
-                )
+                # s_t = v_net(
+                #     sample["latents"][:, t],
+                #     sample['timesteps'][:, t],
+                #     sample["prompt_embeds"]
+                # )
+                # s_tt = v_net(
+                #     sample['next_latents'][:, t],
+                #     sample['next_timesteps'][:, t],
+                #     sample["prompt_embeds"]
+                # )
 
-                if sample['next_timesteps'][:, t] == 1:
-                    r = reward
-                elif sample['next_timesteps'][:, t] == -1:
-                    s_tt = reward
+                # if sample['next_timesteps'][:, t] == 1:
+                #     r = reward
+                # elif sample['next_timesteps'][:, t] == -1:
+                #     s_tt = reward
 
-                adv = r + s_tt - s_t
-                avg_adv += adv
+                # adv = r + s_tt - s_t
+                # avg_adv += adv
 
                 # free cuda memory
-                del noise_pred, next_latents_pred, s_t, s_tt
-                torch.cuda.empty_cache()
+                # del noise_pred, next_latents_pred, s_t, s_tt
+                # torch.cuda.empty_cache()
             avg_d /= config.sample.num_steps
             avg_adv /= config.sample.num_steps
             print(f"avg d: {avg_d}")

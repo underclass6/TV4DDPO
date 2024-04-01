@@ -38,11 +38,14 @@ def main(_):
     # basic Accelerate and logging setup
     config = FLAGS.config
 
+    run_name = f"ddpo-exp{config.reward_fn}-seed{config.seed}"
+    config.run_name = run_name
+
     unique_id = datetime.datetime.now().strftime("%Y.%m.%d_%H.%M.%S")
     if not config.run_name:
         config.run_name = unique_id
     else:
-        config.run_name += "_" + unique_id
+        config.run_name += "-date" + unique_id
 
     if config.resume_from:
         config.resume_from = os.path.normpath(os.path.expanduser(config.resume_from))
@@ -421,6 +424,13 @@ def main(_):
                 "reward_std": rewards.std(),
             },
             step=global_step,
+        )
+
+        accelerator.log(
+            {
+                "reward_avg": rewards.mean(),
+            },
+            step=epoch
         )
 
         # per-prompt mean/std tracking
