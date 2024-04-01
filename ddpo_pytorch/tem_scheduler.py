@@ -5,14 +5,14 @@
 
 def step_scheduler(t):
     # time stamps
-    t1 = 10
-    t2 = 15
-    t3 = 20
+    t1 = 5
+    t2 = 10
+    t3 = 15
     # temperature stamps
-    tem_max = 100
-    tem_min = 1
-    tem1 = 25
-    tem2 = 5
+    tem_max = 10
+    tem_min = 0.1
+    tem1 = 2
+    tem2 = 1
 
     if t < t1:
         return tem_max

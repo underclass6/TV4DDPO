@@ -435,70 +435,70 @@ def main(_):
             avg_adv = 0.0
             for t in range(config.sample.num_steps):
                 # calculate the action distance
-                # if config.train.cfg:
-                    # concat negative prompts to sample prompts to avoid two forward passes
-                #     embeds = torch.cat(
-                #         [train_neg_prompt_embeds, sample["prompt_embeds"]]
-                #     )
-                # else:
-                #     embeds = sample["prompt_embeds"]
+                if config.train.cfg:
+                  # concat negative prompts to sample prompts to avoid two forward passes
+                    embeds = torch.cat(
+                        [train_neg_prompt_embeds, sample["prompt_embeds"]]
+                    )
+                else:
+                    embeds = sample["prompt_embeds"]
 
-                # if config.train.cfg:
-                #     noise_pred = unet(
-                #         torch.cat([sample["latents"][:, t]] * 2),
-                #         torch.cat([sample["timesteps"][:, t]] * 2),
-                #         embeds,
-                #     ).sample
-                #     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                #     noise_pred = (
-                #             noise_pred_uncond
-                #             + config.sample.guidance_scale
-                #             * (noise_pred_text - noise_pred_uncond)
-                #     )
-                # else:
-                #     noise_pred = unet(
-                #         sample["latents"][:, t],
-                #         sample["timesteps"][:, t],
-                #         embeds,
-                #     ).sample
+                if config.train.cfg:
+                    noise_pred = unet(
+                        torch.cat([sample["latents"][:, t]] * 2),
+                        torch.cat([sample["timesteps"][:, t]] * 2),
+                        embeds,
+                    ).sample
+                    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                    noise_pred = (
+                            noise_pred_uncond
+                            + config.sample.guidance_scale
+                            * (noise_pred_text - noise_pred_uncond)
+                    )
+                else:
+                    noise_pred = unet(
+                        sample["latents"][:, t],
+                        sample["timesteps"][:, t],
+                        embeds,
+                    ).sample
 
-                # next_latents_pred, log_prob = ddim_step_with_logprob(
-                #     pipeline.scheduler,
-                #     noise_pred,
-                #     sample["timesteps"][:, t],
-                #     sample["latents"][:, t],
-                #     eta=config.sample.eta,
-                #     prev_sample=sample["next_latents"][:, t],
-                # )
+                next_latents_pred, log_prob = ddim_step_with_logprob(
+                    pipeline.scheduler,
+                    noise_pred,
+                    sample["timesteps"][:, t],
+                    sample["latents"][:, t],
+                    eta=config.sample.eta,
+                    prev_sample=sample["next_latents"][:, t],
+                )
 
-                # latents_diff = next_latents_pred - sample["next_latents"][:, t]
-                # d = torch.norm(latents_diff, p=2, dim=(1, 2, 3))
+                latents_diff = next_latents_pred - sample["next_latents"][:, t]
+                d = torch.norm(latents_diff, p=2, dim=(1, 2, 3))
 
-                # avg_d += d
+                avg_d += d
 
                 # calculate the advantages
-                reward = sample["rewards"]
+                # reward = sample["rewards"]
 
-                r = 0.0
+                # r = 0.0
 
-                s_t = v_net(
-                    sample["latents"][:, t],
-                    sample['timesteps'][:, t],
-                    sample["prompt_embeds"]
-                )
-                s_tt = v_net(
-                    sample['next_latents'][:, t],
-                    sample['next_timesteps'][:, t],
-                    sample["prompt_embeds"]
-                )
+                # s_t = v_net(
+                #     sample["latents"][:, t],
+                #     sample['timesteps'][:, t],
+                #     sample["prompt_embeds"]
+                # )
+                # s_tt = v_net(
+                #     sample['next_latents'][:, t],
+                #     sample['next_timesteps'][:, t],
+                #     sample["prompt_embeds"]
+                # )
 
-                if sample['next_timesteps'][:, t] == 1:
-                    r = reward
-                elif sample['next_timesteps'][:, t] == -1:
-                    s_tt = reward
+                # if sample['next_timesteps'][:, t] == 1:
+                #     r = reward
+                # elif sample['next_timesteps'][:, t] == -1:
+                #     s_tt = reward
 
-                adv = r + s_tt - s_t
-                avg_adv += adv
+                # adv = r + s_tt - s_t
+                # avg_adv += adv
 
                 # free cuda memory
                 # del noise_pred, next_latents_pred, s_t, s_tt
@@ -518,13 +518,6 @@ def main(_):
         # sample from selection probability
         indices = torch.multinomial(selection_prob, selected_size)
         selected_trajs = {k: trajs_collated[k][indices] for k in trajs_collated.keys()}
-
-        # trajs_value_sorted, indices = torch.sort(trajs_value, descending=True)
-        #
-        # selected_indices = indices[:selected_size]
-        #
-        # selected_trajs = {k: trajs_collated[k][selected_indices] for k in trajs_collated.keys()}
-
 
 
         # collate samples into dict where each entry has shape (num_batches_per_epoch * sample.batch_size, ...)
