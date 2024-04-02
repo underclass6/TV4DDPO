@@ -27,6 +27,22 @@ from functools import partial
 import tqdm
 import tempfile
 from PIL import Image
+import argparse
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--reward_fn", type=str)
+parser.add_argument("--seed", type=int)
+args = parser.parse_args()
+
+# clear command line args for FLAGS
+sys.argv = sys.argv[:1]
+
+# `app.run` calls `sys.exit`
+try:
+  app.run(lambda argv: None)
+except:
+  pass
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
@@ -41,7 +57,13 @@ def main(_):
     # basic Accelerate and logging setup
     config = FLAGS.config
 
+    if args.reward_fn:
+        config.reward_fn = args.reward_fn
+    if args.seed:
+        config.seed = args.seed
+
     run_name = f"ddpo-exp{config.reward_fn}-seed{config.seed}"
+    print(run_name)
     config.run_name = run_name
 
     unique_id = datetime.datetime.now().strftime("%Y.%m.%d_%H.%M.%S")
@@ -412,7 +434,7 @@ def main(_):
                         )  # only log rewards from process 0
                     ],
                 },
-                step=global_step,
+                step=epoch,
             )
 
         # gather rewards across processes
@@ -426,14 +448,7 @@ def main(_):
                 "reward_mean": rewards.mean(),
                 "reward_std": rewards.std(),
             },
-            step=global_step,
-        )
-
-        accelerator.log(
-            {
-                "reward_avg": rewards.mean(),
-            },
-            step=epoch
+            step=epoch,
         )
 
         # per-prompt mean/std tracking
@@ -598,7 +613,7 @@ def main(_):
                         info = {k: torch.mean(torch.stack(v)) for k, v in info.items()}
                         info = accelerator.reduce(info, reduction="mean")
                         info.update({"epoch": epoch, "inner_epoch": inner_epoch})
-                        accelerator.log(info, step=global_step)
+                        accelerator.log(info, step=epoch)
                         global_step += 1
                         info = defaultdict(list)
 

@@ -30,6 +30,26 @@ import tempfile
 from PIL import Image
 import torch.nn.functional as F
 from models.actor_critic import Critic
+import argparse
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--reward_fn", type=str)
+parser.add_argument("--seed", type=int)
+parser.add_argument("--rb_size", type=int)
+parser.add_argument("--selected_size", type=int)
+parser.add_argument("--lmd", type=float)
+parser.add_argument("--tem_scheduler", type=str)
+args = parser.parse_args()
+
+# clear command line args for FLAGS
+sys.argv = sys.argv[:1]
+
+# `app.run` calls `sys.exit`
+try:
+  app.run(lambda argv: None)
+except:
+  pass
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
@@ -44,7 +64,20 @@ def main(_):
     # basic Accelerate and logging setup
     config = FLAGS.config
 
-    run_name = f"tv4ddpo-exp{config.reward_fn}-seed{config.seed}-rb_size{config.rb_size}-selected_size{config.selected_size}-lmd_coeff{config.lmd}-tem_scheduler{config.tem_scheduler}"
+    if args.reward_fn:
+        config.reward_fn = args.reward_fn
+    if args.seed:
+        config.seed = args.seed
+    if args.rb_size:
+        config.rb_size = args.rb_size
+    if args.selected_size:
+        config.selected_size = args.selected_size
+    if args.lmd:
+        config.lmd = args.lmd
+    if args.tem_scheduler:
+        config.tem_scheduler = args.tem_scheduler
+
+    run_name = f"tv4ddpo-exp{config.reward_fn}-seed{config.seed}-rb_size{config.rb_size}-selected_size{config.selected_size}-lmd{config.lmd}-tem_scheduler{config.tem_scheduler}"
     config.run_name = run_name
 
     unique_id = datetime.datetime.now().strftime("%Y.%m.%d_%H.%M.%S")
@@ -549,7 +582,7 @@ def main(_):
                         )  # only log rewards from process 0
                     ],
                 },
-                step=global_step,
+                step=epoch,
             )
 
         # gather rewards across processes
@@ -563,14 +596,7 @@ def main(_):
                 "reward_mean": rewards.mean(),
                 "reward_std": rewards.std(),
             },
-            step=global_step,
-        )
-
-        accelerator.log(
-            {
-                "reward_avg": rewards.mean(),
-            },
-            step=epoch
+            step=epoch,
         )
 
         # per-prompt mean/std tracking
@@ -803,7 +829,7 @@ def main(_):
                         info = {k: torch.mean(torch.stack(v)) for k, v in info.items()}
                         info = accelerator.reduce(info, reduction="mean")
                         info.update({"epoch": epoch, "inner_epoch": inner_epoch})
-                        accelerator.log(info, step=global_step)
+                        accelerator.log(info, step=epoch)
                         global_step += 1
                         info = defaultdict(list)
 
