@@ -133,6 +133,6 @@ def get_config():
     config.tem_scheduler = "step_scheduler"
 
     # lambda coefficient
-    config.lmd = 0.5
+    config.lmd = 0.9
 
     return config
