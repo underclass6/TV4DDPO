@@ -456,11 +456,9 @@ def main(_):
                     # checkpoint
                     noise_pred = torch.utils.checkpoint.checkpoint(
                         unet,
-                        (
-                            torch.cat([sample["latents"][:, t]] * 2),
-                            torch.cat([sample["timesteps"][:, t]] * 2),
-                            embeds,
-                        )
+                        torch.cat([sample["latents"][:, t]] * 2),
+                        torch.cat([sample["timesteps"][:, t]] * 2),
+                        embeds
                     ).sample
 
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
@@ -479,11 +477,9 @@ def main(_):
                     # checkpoint
                     noise_pred = torch.utils.checkpoint.checkpoint(
                         unet,
-                        (
-                            sample["latents"][:, t],
-                            sample["timesteps"][:, t],
-                            embeds,
-                        )
+                        sample["latents"][:, t],
+                        sample["timesteps"][:, t],
+                        embeds
                     ).sample
 
                 next_latents_pred, log_prob = ddim_step_with_logprob(
