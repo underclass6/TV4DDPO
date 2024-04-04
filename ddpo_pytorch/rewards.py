@@ -187,3 +187,78 @@ def llava_bertscore():
         return np.array(all_scores), {k: np.array(v) for k, v in all_info.items()}
 
     return _fn
+
+def llava_bertscore_offline():
+    from io import BytesIO
+    from LLaVA.llava import load_llava
+    from LLaVA.bertscore import load_bertscore
+
+    INFERENCE_FN = load_llava("liuhaotian/llava-v1.5-7b")
+    BERTSCORE_FN = load_bertscore()
+
+    batch_size = 16
+
+    def _fn(images, prompts, metadata):
+        del metadata
+        if isinstance(images, torch.Tensor):
+            images = (images * 255).round().clamp(0, 255).to(torch.uint8).cpu().numpy()
+            images = images.transpose(0, 2, 3, 1)  # NCHW -> NHWC
+
+        images_batched = np.array_split(images, np.ceil(len(images) / batch_size))
+        prompts_batched = np.array_split(prompts, np.ceil(len(prompts) / batch_size))
+
+        all_scores = []
+        all_info = {
+            "precision": [],
+            "f1": [],
+            "outputs": [],
+        }
+
+        for image_batch, prompt_batch in zip(images_batched, prompts_batched):
+            jpeg_images = []
+
+            # Compress the images using JPEG
+            for image in image_batch:
+                img = Image.fromarray(image)
+                buffer = BytesIO()
+                img.save(buffer, format="JPEG", quality=80)
+                jpeg_images.append(buffer.getvalue())
+
+            queries = [["Answer concisely: what is going on in this image?"]] * len(image_batch)
+            answers = [[f"The image contains {prompt}"] for prompt in prompt_batch]
+
+            outputs = INFERENCE_FN(jpeg_images, queries)
+
+            response = {"outputs": outputs}
+
+            output_shape = np.array(outputs).shape
+
+            (
+                response["precision"],
+                response["recall"],
+                response["f1"],
+            ) = BERTSCORE_FN(
+                np.array(outputs).reshape(-1).tolist(),
+                np.array(answers).reshape(-1).tolist(),
+            )
+
+            for key in ["precision", "recall", "f1"]:
+                response[key] = response[key].reshape(output_shape).tolist()
+
+            response_data = response
+
+            # use the recall score as the reward
+            scores = np.array(response_data["recall"]).squeeze()
+            all_scores += scores.tolist()
+
+            # save the precision and f1 scores for analysis
+            all_info["precision"] += (
+                np.array(response_data["precision"]).squeeze().tolist()
+            )
+            all_info["f1"] += np.array(response_data["f1"]).squeeze().tolist()
+            all_info["outputs"] += np.array(response_data["outputs"]).squeeze().tolist()
+
+        return np.array(all_scores), {k: np.array(v) for k, v in all_info.items()}
+
+    return _fn
+
